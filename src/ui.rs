@@ -87,6 +87,106 @@ fn build_layout(
     }
 }
 
+fn max_line_width(text: &str) -> usize {
+    text.lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+fn pad_ascii_lines(ascii_art: &str, fixed_width: usize) -> Vec<String> {
+    ascii_art
+        .lines()
+        .map(|line| {
+            let line_width = line.chars().count();
+            if line_width >= fixed_width {
+                line.to_string()
+            } else {
+                format!("{}{}", line, " ".repeat(fixed_width - line_width))
+            }
+        })
+        .collect()
+}
+
+fn figlet_lines(font: &FIGlet, value: &str) -> Vec<String> {
+    font.convert(value)
+        .map(|figure| figure.to_string().lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn figlet_height(font: &FIGlet) -> usize {
+    figlet_lines(font, "0").len().max(1)
+}
+
+fn digit_cell_width(font: &FIGlet) -> usize {
+    ('0'..='9')
+        .map(|digit| max_line_width(&figlet_lines(font, &digit.to_string()).join("\n")))
+        .max()
+        .unwrap_or(0)
+}
+
+fn blank_lines(height: usize, width: usize) -> Vec<String> {
+    vec![" ".repeat(width); height]
+}
+
+fn normalize_glyph(mut lines: Vec<String>, height: usize, width: usize) -> Vec<String> {
+    lines.resize_with(height, String::new);
+    lines
+        .into_iter()
+        .take(height)
+        .map(|line| {
+            let line_width = line.chars().count();
+            if line_width >= width {
+                line
+            } else {
+                format!("{}{}", line, " ".repeat(width - line_width))
+            }
+        })
+        .collect()
+}
+
+fn fixed_width_time_lines(font: &FIGlet, value: &str) -> Vec<String> {
+    const DIGIT_GAP: usize = 1;
+    const SPACE_WIDTH: usize = 2;
+
+    let height = figlet_height(font);
+    let digit_width = digit_cell_width(font);
+    let mut rows = vec![String::new(); height];
+    let mut previous_was_digit = false;
+
+    for ch in value.chars() {
+        let glyph = if ch.is_ascii_digit() {
+            if previous_was_digit {
+                for row in &mut rows {
+                    row.push_str(&" ".repeat(DIGIT_GAP));
+                }
+            }
+            normalize_glyph(figlet_lines(font, &ch.to_string()), height, digit_width)
+        } else if ch == ' ' {
+            blank_lines(height, SPACE_WIDTH)
+        } else {
+            let glyph_lines = figlet_lines(font, &ch.to_string());
+            let width = max_line_width(&glyph_lines.join("\n"));
+            normalize_glyph(glyph_lines, height, width)
+        };
+
+        for (row, glyph_line) in rows.iter_mut().zip(glyph) {
+            row.push_str(&glyph_line);
+        }
+
+        previous_was_digit = ch.is_ascii_digit();
+    }
+
+    rows
+}
+
+fn centered_fixed_area(area: Rect, width: usize) -> Rect {
+    let width = width.min(area.width as usize) as u16;
+    let x = area.x + area.width.saturating_sub(width) / 2;
+
+    Rect::new(x, area.y, width, area.height)
+}
+
 pub fn draw(f: &mut Frame, data: &mut UiData) {
     let area = f.area();
 
@@ -102,26 +202,40 @@ pub fn draw(f: &mut Frame, data: &mut UiData) {
     let main_area = Rect::new(area.x, area.y, area.width, main_area_height);
 
     // 3. Generate ASCII art and calculate content height
-    let figure = data.font.convert(data.time_str).unwrap();
-    let ascii_art = figure.to_string();
-    let ascii_height = ascii_art.lines().count();
+    let ascii_lines = fixed_width_time_lines(data.font, data.time_str);
+    let fixed_width = ascii_lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let ascii_lines = pad_ascii_lines(&ascii_lines.join("\n"), fixed_width);
+    let ascii_height = ascii_lines.len();
     let subtitle_height = data.subtitle_str.lines().count();
     let content_height = ascii_height + subtitle_height + 1;
 
     let (content_area, panel_area) =
         build_layout(main_area, data.show_panel, data.panel_ratio, content_height);
+    let ascii_area = Rect::new(
+        content_area.x,
+        content_area.y,
+        content_area.width,
+        ascii_height as u16,
+    );
+    let time_area = centered_fixed_area(ascii_area, fixed_width);
+    let subtitle_area = Rect::new(
+        content_area.x,
+        content_area.y + ascii_height as u16,
+        content_area.width,
+        subtitle_height as u16,
+    );
 
     // 4. Draw center area (ASCII art + Subtitle)
     if let Some(ref gradient) = data.gradient {
-        let max_width = ascii_art
-            .lines()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(1);
+        let max_width = fixed_width.max(1);
 
         let mut lines = Vec::new();
 
-        for line in ascii_art.lines() {
+        for line in &ascii_lines {
             let mut spans = Vec::new();
             for (j, ch) in line.chars().enumerate() {
                 let ratio = j as f32 / max_width as f32;
@@ -135,37 +249,28 @@ pub fn draw(f: &mut Frame, data: &mut UiData) {
             lines.push(Line::from(spans));
         }
 
-        for line in data.subtitle_str.lines() {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(data.subtitle_color),
-            )));
-        }
+        let time_paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Left);
 
-        let center_paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
-
-        f.render_widget(center_paragraph, content_area);
+        f.render_widget(time_paragraph, time_area);
     } else {
         let mut lines = Vec::new();
 
-        for line in ascii_art.lines() {
+        for line in &ascii_lines {
             lines.push(Line::from(Span::styled(
                 line,
                 Style::default().fg(data.clock_color),
             )));
         }
 
-        for line in data.subtitle_str.lines() {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(data.subtitle_color),
-            )));
-        }
+        let time_paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Left);
 
-        let center_paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
-
-        f.render_widget(center_paragraph, content_area);
+        f.render_widget(time_paragraph, time_area);
     }
+
+    let subtitle_paragraph = Paragraph::new(data.subtitle_str)
+        .style(Style::default().fg(data.subtitle_color))
+        .alignment(Alignment::Center);
+    f.render_widget(subtitle_paragraph, subtitle_area);
 
     if let Some(panel_area) = panel_area {
         let panel_block = Block::default()
@@ -277,5 +382,41 @@ fn draw_table(f: &mut Frame, area: Rect, data: &mut UiData) {
             .alignment(Alignment::Center);
 
         f.render_widget(help_widget, chunks[1]);
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn changing_digits_preserves_timer_width() {
+        for name in ["ANSI_Shadow", "3d", "3D-ASCII"] {
+            let font = FIGlet::from_file(&format!("assets/{name}.flf")).unwrap();
+            for samples in [
+                ["00 : 00 : 00", "11 : 11 : 11", "88 : 88 : 88"],
+                [
+                    "00 : 00 : 00 . 000",
+                    "11 : 11 : 11 . 111",
+                    "88 : 88 : 88 . 888",
+                ],
+            ] {
+                let widths: Vec<_> = samples
+                    .iter()
+                    .map(|s| max_line_width(&fixed_width_time_lines(&font, s).join("\n")))
+                    .collect();
+                assert!(widths.iter().all(|w| *w == widths[0]), "{name}: {widths:?}");
+            }
+        }
+    }
+    #[test]
+    fn timer_area_centers_and_clips() {
+        assert_eq!(
+            centered_fixed_area(Rect::new(10, 5, 100, 8), 40),
+            Rect::new(40, 5, 40, 8)
+        );
+        assert_eq!(
+            centered_fixed_area(Rect::new(10, 5, 20, 8), 40),
+            Rect::new(10, 5, 20, 8)
+        );
     }
 }
