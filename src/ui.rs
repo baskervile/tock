@@ -2,11 +2,11 @@ use crate::gradient::GradientBox;
 use crate::state::{AppMode, EditMode};
 use figlet_rs::FIGlet;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph, Row, Table, TableState},
-    Frame,
 };
 
 pub struct UiData<'a> {
@@ -189,6 +189,9 @@ fn centered_fixed_area(area: Rect, width: usize) -> Rect {
 
 pub fn draw(f: &mut Frame, data: &mut UiData) {
     let area = f.area();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
 
     // 1. Draw global background
     f.render_widget(
@@ -202,7 +205,12 @@ pub fn draw(f: &mut Frame, data: &mut UiData) {
     let main_area = Rect::new(area.x, area.y, area.width, main_area_height);
 
     // 3. Generate ASCII art and calculate content height
-    let ascii_lines = fixed_width_time_lines(data.font, data.time_str);
+    let mut ascii_lines = fixed_width_time_lines(data.font, data.time_str);
+    if max_line_width(&ascii_lines.join("\n")) > main_area.width as usize
+        || ascii_lines.len() + 2 > main_area.height as usize
+    {
+        ascii_lines = vec![data.time_str.replace(" : ", ":").replace(" . ", ".")];
+    }
     let fixed_width = ascii_lines
         .iter()
         .map(|line| line.chars().count())
@@ -238,7 +246,7 @@ pub fn draw(f: &mut Frame, data: &mut UiData) {
         for line in &ascii_lines {
             let mut spans = Vec::new();
             for (j, ch) in line.chars().enumerate() {
-                let ratio = j as f32 / max_width as f32;
+                let ratio = j as f32 / max_width.saturating_sub(1).max(1) as f32;
                 let color = gradient.at(ratio).to_rgba8();
                 let ratatui_color = Color::Rgb(color[0], color[1], color[2]);
                 spans.push(Span::styled(
@@ -287,17 +295,25 @@ pub fn draw(f: &mut Frame, data: &mut UiData) {
 
     // 6. Draw footer hints (always at bottom)
     if !data.hidden_help {
-        let footer_area = Rect::new(area.x, area.height - 1, area.width, 1);
+        let footer_area = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
         let footer_paragraph = Paragraph::new(data.footer_str)
             .style(Style::default().fg(Color::DarkGray).bg(data.bg_color))
-            .alignment(Alignment::Right);
+            .alignment(Alignment::Center);
 
         f.render_widget(footer_paragraph, footer_area);
     }
 }
 
 fn draw_table(f: &mut Frame, area: Rect, data: &mut UiData) {
-    let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -418,5 +434,76 @@ mod recovery_tests {
             centered_fixed_area(Rect::new(10, 5, 20, 8), 40),
             Rect::new(10, 5, 20, 8)
         );
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+    fn render(width: u16, height: u16, panel: bool) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let font = FIGlet::standard().unwrap();
+        let mut state = TableState::default();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &mut UiData {
+                        font: &font,
+                        time_str: "12 : 34 : 56",
+                        subtitle_str: "Friday",
+                        footer_str: "q quit",
+                        bg_color: Color::Reset,
+                        clock_color: Color::Cyan,
+                        subtitle_color: Color::Reset,
+                        gradient: crate::gradient::parse_color(
+                            "warm",
+                            &std::collections::HashMap::new(),
+                        ),
+                        hidden_help: false,
+                        show_panel: panel,
+                        panel_ratio: 50,
+                        panel_bg: Color::Reset,
+                        panel_fg: Color::Cyan,
+                        panel_border: Color::Cyan,
+                        panel_border_sides: Borders::ALL,
+                        panel_border_style: BorderType::Rounded,
+                        mode: AppMode::Clock,
+                        items: &[],
+                        headers: &["Time"],
+                        table_state: &mut state,
+                        edit_mode: &EditMode::Normal,
+                        input_buffer: "",
+                    },
+                )
+            })
+            .unwrap();
+        terminal
+    }
+    #[test]
+    fn rgb_gradient_reaches_the_terminal_buffer() {
+        let t = render(160, 30, false);
+        let colors: std::collections::HashSet<_> = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .filter_map(|cell| {
+                if let Color::Rgb(r, g, b) = cell.fg {
+                    Some((r, g, b))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(colors.len() > 10);
+    }
+    #[test]
+    fn tiny_windows_and_panels_do_not_panic() {
+        for (w, h) in [(0, 0), (1, 1), (2, 2), (10, 3), (40, 10)] {
+            render(w, h, true);
+            render(w, h, false);
+        }
     }
 }

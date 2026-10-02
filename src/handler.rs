@@ -1,4 +1,8 @@
-use crate::{data, models, state::{AppMode, AppState, EditMode}, util};
+use crate::{
+    data, models,
+    state::{AppMode, AppState, EditMode},
+    util,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 pub enum Action {
@@ -20,7 +24,9 @@ pub fn handle_key(
     if app_state.show_panel {
         match app_state.edit_mode {
             EditMode::Normal => handle_normal_mode(key_code, modifiers, app_state, headers),
-            EditMode::Typing { is_new_row } => handle_typing_mode(key_code, app_state, headers, is_new_row),
+            EditMode::Typing { is_new_row } => {
+                handle_typing_mode(key_code, app_state, headers, is_new_row)
+            }
         }
     } else {
         handle_panel_closed(key_code, modifiers, app_state)
@@ -34,23 +40,24 @@ fn handle_normal_mode(
     _headers: &[&'static str],
 ) -> Action {
     match key_code {
-        KeyCode::Esc => Action::Quit,
+        KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Action::Quit,
         KeyCode::Enter => {
             // Stop any playing sound when pressing Enter
             app_state.stop_sound();
             app_state.countdown_played = false;
-            
+
             if let AppMode::Countdown = app_state.mode
                 && let Some(r) = app_state.table_state.selected()
-                    && r < app_state.data.presets.len() {
-                        let preset = &app_state.data.presets[r];
-                        app_state.cd_initial = std::time::Duration::from_secs(preset.duration);
-                        app_state.cd_remaining = app_state.cd_initial;
-                        app_state.cd_name = preset.name.clone();
-                        app_state.cd_target = None;
-                        app_state.is_running = false;
-                    }
+                && r < app_state.data.presets.len()
+            {
+                let preset = &app_state.data.presets[r];
+                app_state.cd_initial = std::time::Duration::from_secs(preset.duration);
+                app_state.cd_remaining = app_state.cd_initial;
+                app_state.cd_name = preset.name.clone();
+                app_state.cd_target = None;
+                app_state.is_running = false;
+            }
             Action::Continue
         }
         KeyCode::Down => {
@@ -82,7 +89,10 @@ fn handle_normal_mode(
             Action::Continue
         }
         KeyCode::Char('e') => {
-            if let (Some(r), Some(c)) = (app_state.table_state.selected(), app_state.table_state.selected_column()) {
+            if let (Some(r), Some(c)) = (
+                app_state.table_state.selected(),
+                app_state.table_state.selected_column(),
+            ) {
                 app_state.input_buffer = app_state.get_cell_content(r, c);
                 app_state.edit_mode = EditMode::Typing { is_new_row: false };
             }
@@ -133,18 +143,20 @@ fn handle_typing_mode(
         }
         KeyCode::Right => {
             if let Some(c) = app_state.table_state.selected_column()
-                && c < headers.len() - 1 {
-                    app_state.table_state.select_column(Some(c + 1));
-                    app_state.input_buffer.clear();
-                }
+                && c < headers.len() - 1
+            {
+                app_state.table_state.select_column(Some(c + 1));
+                app_state.input_buffer.clear();
+            }
             Action::Continue
         }
         KeyCode::Left => {
             if let Some(c) = app_state.table_state.selected_column()
-                && c > 0 {
-                    app_state.table_state.select_column(Some(c - 1));
-                    app_state.input_buffer.clear();
-                }
+                && c > 0
+            {
+                app_state.table_state.select_column(Some(c - 1));
+                app_state.input_buffer.clear();
+            }
             Action::Continue
         }
         KeyCode::Char(ch) => {
@@ -195,7 +207,10 @@ fn handle_add(app_state: &mut AppState) {
             app_state.mark_dirty();
         }
         AppMode::Countdown => {
-            app_state.data.presets.push(models::CountdownPreset::default());
+            app_state
+                .data
+                .presets
+                .push(models::CountdownPreset::default());
             let len = app_state.data.presets.len();
             app_state.table_state.select(Some(len - 1));
             app_state.table_state.select_column(Some(0));
@@ -237,8 +252,11 @@ fn handle_enter(app_state: &mut AppState, headers: &[&'static str], is_new_row: 
     // Stop any playing sound when pressing Enter
     app_state.stop_sound();
     app_state.countdown_played = false;
-    
-    if let (Some(r), Some(c)) = (app_state.table_state.selected(), app_state.table_state.selected_column()) {
+
+    if let (Some(r), Some(c)) = (
+        app_state.table_state.selected(),
+        app_state.table_state.selected_column(),
+    ) {
         let col_count = headers.len();
         let is_valid = !app_state.input_buffer.trim().is_empty();
 
@@ -255,72 +273,68 @@ fn handle_enter(app_state: &mut AppState, headers: &[&'static str], is_new_row: 
 
         if is_valid {
             let input = std::mem::take(&mut app_state.input_buffer);
-            
+
             let saved = match app_state.mode {
-                AppMode::Clock if r < app_state.data.alarms.len() => {
-                    match c {
-                        0 => {
-                            if let Some(time) = util::parse_time(&input) {
-                                app_state.data.alarms[r].time = time;
-                                true
-                            } else {
-                                app_state.input_buffer = input;
-                                return;
-                            }
-                        }
-                        1 => {
-                            app_state.data.alarms[r].enabled = input == "✔";
+                AppMode::Clock if r < app_state.data.alarms.len() => match c {
+                    0 => {
+                        if let Some(time) = util::parse_time(&input) {
+                            app_state.data.alarms[r].time = time;
                             true
+                        } else {
+                            app_state.input_buffer = input;
+                            return;
                         }
-                        2 => {
-                            if let Some(repeat) = util::parse_repeat(&input) {
-                                app_state.data.alarms[r].repeat = repeat;
-                                true
-                            } else {
-                                app_state.input_buffer = input;
-                                return;
-                            }
-                        }
-                        3 => {
-                            app_state.data.alarms[r].note = input;
-                            true
-                        }
-                        4 => {
-                            app_state.data.alarms[r].alarm_duration = input.parse().unwrap_or(60);
-                            true
-                        }
-                        5 => {
-                            app_state.data.alarms[r].alarm_repeat = input.parse().unwrap_or(0);
-                            true
-                        }
-                        _ => false,
                     }
-                }
-                AppMode::Countdown if r < app_state.data.presets.len() => {
-                    match c {
-                        0 => {
-                            app_state.data.presets[r].name = input;
-                            true
-                        }
-                        1 => {
-                            app_state.data.presets[r].duration = input.parse().unwrap_or(0);
-                            true
-                        }
-                        2 => {
-                            app_state.data.presets[r].alarm_duration = input.parse().unwrap_or(60);
-                            true
-                        }
-                        3 => {
-                            app_state.data.presets[r].alarm_repeat = input.parse().unwrap_or(0);
-                            true
-                        }
-                        _ => false,
+                    1 => {
+                        app_state.data.alarms[r].enabled = input == "✔";
+                        true
                     }
-                }
+                    2 => {
+                        if let Some(repeat) = util::parse_repeat(&input) {
+                            app_state.data.alarms[r].repeat = repeat;
+                            true
+                        } else {
+                            app_state.input_buffer = input;
+                            return;
+                        }
+                    }
+                    3 => {
+                        app_state.data.alarms[r].note = input;
+                        true
+                    }
+                    4 => {
+                        app_state.data.alarms[r].alarm_duration = input.parse().unwrap_or(60);
+                        true
+                    }
+                    5 => {
+                        app_state.data.alarms[r].alarm_repeat = input.parse().unwrap_or(0);
+                        true
+                    }
+                    _ => false,
+                },
+                AppMode::Countdown if r < app_state.data.presets.len() => match c {
+                    0 => {
+                        app_state.data.presets[r].name = input;
+                        true
+                    }
+                    1 => {
+                        app_state.data.presets[r].duration = input.parse().unwrap_or(0);
+                        true
+                    }
+                    2 => {
+                        app_state.data.presets[r].alarm_duration = input.parse().unwrap_or(60);
+                        true
+                    }
+                    3 => {
+                        app_state.data.presets[r].alarm_repeat = input.parse().unwrap_or(0);
+                        true
+                    }
+                    _ => false,
+                },
                 _ => false,
             };
 
-                if saved {
+            if saved {
                 if let Err(e) = data::save_data(&app_state.data) {
                     eprintln!("Failed to save data: {}", e);
                 }
@@ -337,7 +351,10 @@ fn handle_enter(app_state: &mut AppState, headers: &[&'static str], is_new_row: 
 }
 
 fn handle_space(app_state: &mut AppState) {
-    if let (Some(r), Some(c)) = (app_state.table_state.selected(), app_state.table_state.selected_column()) {
+    if let (Some(r), Some(c)) = (
+        app_state.table_state.selected(),
+        app_state.table_state.selected_column(),
+    ) {
         if app_state.mode == AppMode::Clock && r < app_state.data.alarms.len() {
             if c == 1 {
                 app_state.data.alarms[r].enabled = !app_state.data.alarms[r].enabled;

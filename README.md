@@ -1,178 +1,107 @@
-# tock
+# Tock for macOS
 
-A terminal ASCII clock application with stopwatch and countdown timer functionality, built with Rust and ratatui.
+A terminal clock, stopwatch and countdown timer with steady-width digits, RGB gradients and a built-in alert. Tuned for Apple silicon macOS and Ghostty; no custom sound files or Nerd Font are required.
 
-## Preview
+## Install
 
-![](./docs/1.png)
-
-![](./docs/2.png)
-
-## TODO
-
-- [ ] fg优先级
-- [ ] 迁移[bit font](https://github.com/akirco/ansifont)到rust,复用到该程序，重新设计配置
-- [ ] 新增aur安装
-- [ ] 添加CI,CD,RELEASES
-
-## Features
-
-- **Clock Mode**: Display current time with ASCII art, supports alarms with customizable time, repeat pattern, and notes
-- **Stopwatch Mode**: Full-featured stopwatch with lap history tracking
-- **Countdown Mode**: Timer with presets for common durations
-- **Color Gradient**: Multiple gradient presets and custom color support
-- **Custom Fonts**: Support for FIGlet .flf font files
-
-## Installation
-
-```bash
-cargo install --git https://github.com/akirco/tock.git
+```sh
+brew install baskervile/tools/tock
 ```
 
-Or build from source:
+If your shell still finds an older Cargo binary, check `type -a tock`. Put Homebrew's bin directory first in PATH, or update your Cargo installation from this repository.
 
-```bash
-git clone https://github.com/akirco/tock.git
-cd tock
-cargo build --release
+## Commands
+
+```sh
+tock                         # clock, warm gradient
+tock -s                      # stopwatch; Space starts it
+tock -t 5m                   # five-minute countdown, starts immediately
+tock -t 1h30m                # one hour thirty minutes
+tock --mode countdown        # open countdown presets
+tock --color viridis
+tock --color '#89b4fa,#cba6f7'
+tock --color none --fg cyan   # solid color
+tock --silent                # no audio
+tock --font small            # smaller ASCII digits
+tock --hidden-help           # hide the footer
+tock --config-dir            # print the active settings directory
+tock --help
 ```
 
-## Usage
+Durations use `h`, `m` and `s`; plain numbers and zero-length timers are rejected. `-s` starts paused. `-t` starts immediately. Close Tock to stop a timer: it is not a background alarm service, and sleeping macOS may delay an alert.
 
-### Clock Mode (Default)
-```bash
-tock
-```
+## Keys
 
-## figlet Font
+| Key | Action |
+| --- | --- |
+| Tab | Clock → stopwatch → countdown |
+| Space | Start/pause timer; stop an alert |
+| r | Reset timer; stopwatch records the elapsed interval |
+| p | Show/hide the panel |
+| q, Esc, Ctrl+C | Quit outside text editing |
+| Arrow keys | Move through panel rows/columns |
+| g / G | First / last row |
+| a / e / d | Add / edit / delete a panel item |
+| Enter | Apply a countdown preset; confirm a field while editing |
+| Esc while editing | Cancel editing |
 
-[fonts](https://github.com/hIMEI29A/FigletFonts)
+To create a countdown preset: Tab to countdown, press p, then a. Enter a name and a duration **in seconds**, using Enter to advance fields. Afterwards select it, press Enter to load it, and Space to start. In alarm editing, Space toggles enabled and cycles repeat options in those columns.
 
+Switching modes resets the current stopwatch and pauses the countdown. Alarms are checked while clock mode is active. Keep Tock in clock mode when using its alarms.
 
-~~ ### Stopwatch Mode ~~
-```bash
-tock -s
-# or
-tock --stopwatch
-```
+## Gradients
 
-~~ ### Countdown Mode ~~
-```bash
-tock -t 5m
-# or
-tock --time 1h30m
-```
+The default is `warm`. An explicit `--fg` selects a solid color unless a gradient is also supplied. Disable a configured gradient with `--color none`.
 
-## Options
+Presets: `rainbow`, `sinebow`, `viridis`, `magma`, `plasma`, `inferno`, `turbo`, `spectral`, `blues`, `greens`, `reds`, `oranges`, `purples`, `warm`, `cool`.
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--font` | `-f` | FIGlet font (standard, small, big, slant) or .flf file path | standard |
-| `--bg` | `-b` | Background color | reset |
-| `--fg` | `-c` | Foreground/clock color | cyan |
-| `--subtitle-fg` | - | Subtitle text color | cyan |
-| `--color` | - | Clock color gradient (see below) | - |
-| `--panel-ratio` | `-r` | Panel height percentage (1-99) | 50 |
-| `--panel-bg` | - | Panel background color | reset |
-| `--panel-fg` | - | Panel foreground color | cyan |
-| `--panel-border` | - | Panel border color | cyan |
-| `--panel-border-sides` | - | Panel border sides (none, all, left, right, top, bottom, horizontal, vertical) | vertical |
-| `--panel-border-style` | - | Panel border style (plain, rounded, double, thick) | rounded |
-| `--alarm-sound` | - | Alarm sound file name | alarm |
-| `--countdown-sound` | - | Countdown end sound file name | alarm |
-| `--hidden-help` | - | Hide help text in footer and panel | false |
+Custom gradients take two or more comma-separated HTML colors. Invalid names produce an error before entering full-screen mode.
 
-### Color Options
+## Settings and sound
 
-Available solid colors: black, red, green, yellow, blue, magenta, cyan, white, reset, dark_gray, light_red, light_green, light_yellow, light_blue, light_magenta, light_cyan, light_white.
+Run `tock --config-dir` to find the active folder. New installations use `~/.config/tock` (or `$XDG_CONFIG_HOME/tock`). Existing macOS settings in `~/Library/Application Support/tock` remain supported when the new folder is absent. Settings, sound lookup and data storage all use that same directory.
 
-#### Gradient Presets
-
-```bash
---color rainbow
---color sinebow
---color viridis
---color magma
---color plasma
---color inferno
---color turbo
---color spectral
---color blues
---color greens
---color reds
---color oranges
---color purples
---color warm
---color cool
-```
-
-#### Custom Gradient Colors
-
-```bash
-# CLI: comma-separated color names or hex colors
---color red,blue,green
---color "#ff0000,#00ff00,#0000ff"
-
-# Config file
-color = "red,blue,green"
-color = "#ff0000,#00ff00"
-```
-
-## Configuration File
-
-Configuration is stored at `~/.config/tock/config.toml`:
+Create `config.toml` there:
 
 ```toml
-font = "ANSI_Shadow.flf"
+font = "standard"
 bg = "reset"
-fg = "cyan"
+color = "warm"
 subtitle_fg = "cyan"
-color = "rainbow"
-
 panel_ratio = 50
-panel_bg = "reset"
-panel_fg = "cyan"
-panel_border = "cyan"
-panel_border_sides = "vertical"
 panel_border_style = "rounded"
-
-alarm_sound = "alarm"
-countdown_sound = "alarm"
-
+silent = false
 hidden_help = false
 ```
 
-Place custom fonts in `~/.config/tock/fonts/`.
+CLI options override settings. `data.json` stores alarms, countdown presets and stopwatch history. Back up that folder with your projects.
 
-## Controls
+An alert is bundled into the binary and plays without setup. Audio opens only when an alert fires. To choose your own sound:
 
-### Global
-- `Esc` / `Ctrl+C` - Exit
-- `Space` - Play/Pause (Stopwatch/Countdown)
-- `r` - Reset (Stopwatch/Countdown)
-- `p` - Toggle panel
-- `Tab` - Switch mode
+```sh
+tock --alarm-sound "$HOME/Music/alarm.wav"
+tock -t 5m --countdown-sound "$HOME/Music/timer.mp3"
+```
 
-### Panel Navigation
-- `↑↓←→` - Navigate rows/columns
-- `g` - Jump to first row
-- `G` - Jump to last row
+You can also put WAV, MP3, OGG or FLAC files in the active folder's `sounds/` directory and refer to their name. Config keys are `alarm_sound` and `countdown_sound`. Omit these keys to use the bundled alert. Missing explicitly configured files produce an actionable error instead of startup warnings.
 
-### Panel Editing
-- `a` - Add new item
-- `e` - Edit selected cell
-- `d` - Delete selected row
-- `Enter` - Confirm input / Apply preset (Countdown)
-- `Esc` - Cancel editing
-- `Space` - Toggle enabled / Cycle repeat options
+Fonts: built-in `standard`, `small`, `big`, `slant`, or an explicit `.flf` path. Use a full path for custom fonts.
 
-## Data Storage
+## Ghostty
 
-Data is stored in `~/.config/tock/data.json`:
-- Alarms (Clock mode)
-- Countdown presets
-- Stopwatch history
+Use Ghostty's normal environment and leave `TERM` as `xterm-ghostty`; no color workaround is required. Tock outputs RGB colors directly. If your shell sets `NO_COLOR`, colors are intentionally disabled; try `env -u NO_COLOR tock --color warm`. Its reset background respects your terminal theme, mouse selection is not captured, and small windows automatically fall back to compact digits. Increase the window width if you want large digits. [Ghostty terminfo documentation](https://ghostty.org/docs/help/terminfo).
 
-## License
+## Build
 
-MIT
+```sh
+xcode-select --install
+brew install rust
+git clone https://github.com/baskervile/tock.git
+cd tock
+cargo test --locked
+cargo install --path . --locked
+```
+
+## Provenance
+
+Fork of [akirco/tock](https://github.com/akirco/tock). Custom digit rendering recovered from the owner's July development history; see [RECOVERY.md](RECOVERY.md). The bundled alert is an original synthesized WAV. MIT license; upstream copyright is retained.

@@ -1,39 +1,40 @@
-use crate::cli::Cli;
+use crate::cli::{Cli, Mode};
 use crate::config::load_config;
-use crate::gradient::{parse_color, GradientBox};
-use crate::sound::{get_sound_path, SoundPlayer};
-use crate::state::AppState;
+use crate::gradient::{GradientBox, parse_color};
+use crate::sound::{BUILTIN_SOUND, SoundPlayer, get_sound_path};
+use crate::state::{AppMode, AppState};
 use crate::util::{parse_border_sides, parse_border_style};
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{self, Event, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use figlet_rs::FIGlet;
-use ratatui::{backend::CrosstermBackend, style::Color, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend, style::Color};
 use std::{collections::HashMap, io, str::FromStr, sync::Arc, time::Duration};
 
 pub fn run() -> Result<(), io::Error> {
-    let mut config = build_config()?;
+    let cli = Cli::parse();
+    if cli.config_dir {
+        println!(
+            "{}",
+            crate::config::config_dir()
+                .ok_or_else(|| io::Error::other("HOME is not set"))?
+                .display()
+        );
+        return Ok(());
+    }
+    let mut config = build_config(cli)?;
 
     enable_raw_mode()?;
+    let _restore = TerminalRestore;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = main_loop(
-        &mut terminal,
-        &mut config.app_state,
-        &config.ui_config,
-    );
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-    terminal.show_cursor()?;
-
-    result
+    main_loop(&mut terminal, &mut config.app_state, &config.ui_config)
 }
 
 struct AppConfig {
@@ -41,42 +42,74 @@ struct AppConfig {
     ui_config: UiConfig,
 }
 
-fn build_config() -> Result<AppConfig, io::Error> {
-    let cli = Cli::parse();
+fn build_config(cli: Cli) -> Result<AppConfig, io::Error> {
     let config = load_config();
+    let solid_color_requested = cli.fg.is_some() || config.fg.is_some();
 
-    let font_choice = cli.font.or(config.font).unwrap_or_else(|| "standard".to_string());
+    let font_choice = cli
+        .font
+        .or(config.font)
+        .unwrap_or_else(|| "standard".to_string());
     let bg_str = cli.bg.or(config.bg).unwrap_or_else(|| "reset".to_string());
     let fg_str = cli.fg.or(config.fg).unwrap_or_else(|| "cyan".to_string());
-    let subtitle_fg_str = cli.subtitle_fg.or(config.subtitle_fg).unwrap_or_else(|| "cyan".to_string());
+    let subtitle_fg_str = cli
+        .subtitle_fg
+        .or(config.subtitle_fg)
+        .unwrap_or_else(|| "cyan".to_string());
     let hidden_help = cli.hidden_help || config.hidden_help.unwrap_or(false);
     let panel_ratio = cli.panel_ratio.or(config.panel_ratio).unwrap_or(50);
 
-    let panel_bg_str = cli.panel_bg.or(config.panel_bg).unwrap_or_else(|| "reset".to_string());
-    let panel_fg_str = cli.panel_fg.or(config.panel_fg).unwrap_or_else(|| "cyan".to_string());
-    let panel_border_str = cli.panel_border.or(config.panel_border).unwrap_or_else(|| "cyan".to_string());
-    let panel_border_sides_str = cli.panel_border_sides.or(config.panel_border_sides).unwrap_or_else(|| "vertical".to_string());
-    let panel_border_style_str = cli.panel_border_style.or(config.panel_border_style).unwrap_or_else(|| "rounded".to_string());
+    let panel_bg_str = cli
+        .panel_bg
+        .or(config.panel_bg)
+        .unwrap_or_else(|| "reset".to_string());
+    let panel_fg_str = cli
+        .panel_fg
+        .or(config.panel_fg)
+        .unwrap_or_else(|| "cyan".to_string());
+    let panel_border_str = cli
+        .panel_border
+        .or(config.panel_border)
+        .unwrap_or_else(|| "cyan".to_string());
+    let panel_border_sides_str = cli
+        .panel_border_sides
+        .or(config.panel_border_sides)
+        .unwrap_or_else(|| "vertical".to_string());
+    let panel_border_style_str = cli
+        .panel_border_style
+        .or(config.panel_border_style)
+        .unwrap_or_else(|| "rounded".to_string());
 
-    let gradient = cli.color
+    let gradient_choice = cli
+        .color
         .map(|c| c.join(","))
         .or(config.color)
-        .and_then(|c| parse_color(&c, &HashMap::new()));
-
-    let alarm_sound_cli = cli.alarm_sound.or(config.alarm_sound).or(Some("alarm".to_string()));
-    let countdown_sound_cli = cli.countdown_sound.or(config.countdown_sound).or(Some("alarm".to_string()));
-    
-    let alarm_sound = alarm_sound_cli.and_then(|s| get_sound_path(&s));
-    let countdown_sound = countdown_sound_cli.and_then(|s| get_sound_path(&s));
-
-    if alarm_sound.is_none() {
-        eprintln!("Warning: No alarm sound file found in ~/.config/clock/sounds/");
-    }
-    if countdown_sound.is_none() {
-        eprintln!("Warning: No countdown sound file found in ~/.config/clock/sounds/");
-    }
-
-    let sound_player = Arc::new(SoundPlayer::new());
+        .unwrap_or_else(|| {
+            if solid_color_requested {
+                "none".into()
+            } else {
+                "warm".into()
+            }
+        });
+    let gradient = if gradient_choice.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(parse_color(&gradient_choice, &HashMap::new()).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("Unknown gradient '{gradient_choice}'. Try --color warm or --color '#89b4fa,#cba6f7'")))?)
+    };
+    let silent = cli.silent || config.silent.unwrap_or(false);
+    let resolve_sound = |name: Option<String>| -> Result<Option<String>, io::Error> {
+        if silent {
+            return Ok(None);
+        }
+        match name {
+            None => Ok(Some(BUILTIN_SOUND.into())),
+            Some(name) => get_sound_path(&name).map(|p| Some(p.to_string_lossy().into_owned()))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Alert sound '{name}' not found. Use an existing file or omit the sound option for the bundled alert."))),
+        }
+    };
+    let alarm_sound = resolve_sound(cli.alarm_sound.or(config.alarm_sound))?;
+    let countdown_sound = resolve_sound(cli.countdown_sound.or(config.countdown_sound))?;
+    let sound_player = (!silent).then(|| Arc::new(SoundPlayer::new()));
 
     let bg_color = Color::from_str(&bg_str).unwrap_or(Color::Reset);
     let clock_color = Color::from_str(&fg_str).unwrap_or(Color::Cyan);
@@ -87,11 +120,26 @@ fn build_config() -> Result<AppConfig, io::Error> {
     let panel_border_sides = parse_border_sides(&panel_border_sides_str);
     let panel_border_style = parse_border_style(&panel_border_style_str);
 
-    let app_state = AppState::new(
-        Some(sound_player),
-        alarm_sound.map(|p| p.to_string_lossy().to_string()),
-        countdown_sound.map(|p| p.to_string_lossy().to_string()),
-    );
+    let mut app_state = AppState::new(sound_player, alarm_sound, countdown_sound);
+    app_state.mode = if cli.stopwatch {
+        AppMode::Stopwatch
+    } else if cli.time.is_some() {
+        AppMode::Countdown
+    } else {
+        match cli.mode {
+            Mode::Clock => AppMode::Clock,
+            Mode::Stopwatch => AppMode::Stopwatch,
+            Mode::Countdown => AppMode::Countdown,
+        }
+    };
+    if let Some(duration) = cli.time {
+        app_state.cd_initial = duration;
+        app_state.cd_remaining = duration;
+        app_state.cd_name = "Timer".into();
+        app_state.toggle_pause();
+    } else if app_state.mode == AppMode::Countdown {
+        app_state.show_panel = true;
+    }
 
     let font = {
         let font_choice_expanded = expand_path(&font_choice);
@@ -102,7 +150,10 @@ fn build_config() -> Result<AppConfig, io::Error> {
             "big" => FIGlet::big().expect("Failed to load big font"),
             "slant" => FIGlet::slant().expect("Failed to load slant font"),
             _ => FIGlet::from_file(&font_choice_expanded).unwrap_or_else(|_| {
-                eprintln!("Warning: Failed to load font file '{}', using standard", font_choice);
+                eprintln!(
+                    "Warning: Failed to load font file '{}', using standard",
+                    font_choice
+                );
                 FIGlet::standard().expect("Failed to load standard font")
             }),
         }
@@ -110,7 +161,6 @@ fn build_config() -> Result<AppConfig, io::Error> {
 
     let ui_config = UiConfig {
         font,
-        font_choice,
         bg_color,
         clock_color,
         subtitle_color,
@@ -132,7 +182,6 @@ fn build_config() -> Result<AppConfig, io::Error> {
 
 struct UiConfig {
     font: FIGlet,
-    font_choice: String,
     bg_color: Color,
     clock_color: Color,
     subtitle_color: Color,
@@ -161,48 +210,54 @@ fn main_loop(
         let items = app_state.get_items();
 
         let footer_str = format!(
-            "{} (Font: {}) | [Tab] Switch Mode | [p] Panel | [Space] {} | [q] Exit",
+            "{} | Tab mode · p panel · Space {} · r reset · q quit",
             mode.title(),
-            ui_config.font_choice,
             mode.space_key_desc()
         );
 
-        terminal.draw(|f| crate::ui::draw(f, &mut crate::ui::UiData {
-            font: &ui_config.font,
-            time_str: &time_str,
-            subtitle_str: &subtitle_str,
-            footer_str: &footer_str,
-            bg_color: ui_config.bg_color,
-            clock_color: ui_config.clock_color,
-            subtitle_color: ui_config.subtitle_color,
-            gradient: ui_config.gradient.clone(),
-            hidden_help: ui_config.hidden_help,
-            show_panel,
-            panel_ratio: ui_config.panel_ratio,
-            panel_bg: ui_config.panel_bg,
-            panel_fg: ui_config.panel_fg,
-            panel_border: ui_config.panel_border,
-            panel_border_sides: ui_config.panel_border_sides,
-            panel_border_style: ui_config.panel_border_style,
-            mode,
-            items: &items,
-            headers,
-            table_state: &mut app_state.table_state,
-            edit_mode: &app_state.edit_mode,
-            input_buffer: &app_state.input_buffer,
-        }))?;
+        terminal.draw(|f| {
+            crate::ui::draw(
+                f,
+                &mut crate::ui::UiData {
+                    font: &ui_config.font,
+                    time_str: &time_str,
+                    subtitle_str: &subtitle_str,
+                    footer_str: &footer_str,
+                    bg_color: ui_config.bg_color,
+                    clock_color: ui_config.clock_color,
+                    subtitle_color: ui_config.subtitle_color,
+                    gradient: ui_config.gradient.clone(),
+                    hidden_help: ui_config.hidden_help,
+                    show_panel,
+                    panel_ratio: ui_config.panel_ratio,
+                    panel_bg: ui_config.panel_bg,
+                    panel_fg: ui_config.panel_fg,
+                    panel_border: ui_config.panel_border,
+                    panel_border_sides: ui_config.panel_border_sides,
+                    panel_border_style: ui_config.panel_border_style,
+                    mode,
+                    items: &items,
+                    headers,
+                    table_state: &mut app_state.table_state,
+                    edit_mode: &app_state.edit_mode,
+                    input_buffer: &app_state.input_buffer,
+                },
+            )
+        })?;
 
-        if event::poll(Duration::from_millis(50))?
-            && let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-
-                match crate::handler::handle_key(key.code, key.modifiers, app_state, headers) {
-                    crate::handler::Action::Quit => break,
-                    crate::handler::Action::Continue => {}
-                }
+        let interval = if mode == AppMode::Clock { 250 } else { 50 };
+        if event::poll(Duration::from_millis(interval))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
+
+            match crate::handler::handle_key(key.code, key.modifiers, app_state, headers) {
+                crate::handler::Action::Quit => break,
+                crate::handler::Action::Continue => {}
+            }
+        }
     }
 
     Ok(())
@@ -214,8 +269,17 @@ fn expand_path(path: &str) -> String {
             return path.replacen("~", &home, 1);
         }
     } else if path.starts_with("./")
-        && let Ok(cwd) = std::env::current_dir() {
-            return path.replacen(".", &cwd.to_string_lossy(), 1);
-        }
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        return path.replacen(".", &cwd.to_string_lossy(), 1);
+    }
     path.to_string()
+}
+
+struct TerminalRestore;
+impl Drop for TerminalRestore {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+    }
 }
